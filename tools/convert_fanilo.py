@@ -60,9 +60,27 @@ BOOK_NAME_ALIASES = {
     'ASA': "ASANNYAPOSTOLY",
 }
 
-DAY_RE = re.compile(r"^(\d{1,2})(?:er)?\s+([A-Za-zÀ-ÿ]+)\.?\s*$")
+# DAY_RE = re.compile(r"^(\d{1,2})(?:er)?\s+([A-Za-zÀ-ÿ]+)\.?\s*$")
+DAY_RE = re.compile(
+    r'^\s*(\d{1,2})\s*(?:er)?\s+([A-Za-zÀ-ÿ]+)\.?\s*$',
+    re.IGNORECASE
+)
 BLOCK_RE = re.compile(r"^\\?\*?\s*\*{1,3}\s*([A-Za-zÀ-ÿ' \-]{2,40}?)\s*\*{1,3}\s*:\s*(.*)$")
 
+def clean_line(line):
+    line = line.strip()
+
+    # retire le gras Markdown
+    line = re.sub(r'^\*+', '', line)
+    line = re.sub(r'\*+$', '', line)
+
+    # retire les # des titres Markdown
+    line = re.sub(r'^#+\s*', '', line)
+
+    # espaces
+    line = re.sub(r'\s+', ' ', line)
+
+    return line.strip()
 
 def norm(s: str) -> str:
     s = unicodedata.normalize('NFKD', s).upper()
@@ -144,6 +162,11 @@ REF_1CHAP_RE = re.compile(r"^(?P<book>.+?)\s+(?P<v1>\d+)(?:\s*-\s*(?P<v2>\d+))?\
 def parse_reference(ref_text, books_index):
     ref_text = ref_text.replace('*', '').strip()
 
+    # Convertit les chiffres romains en chiffres arabes
+    ref_text = re.sub(r'^I\s+', '1 ', ref_text, flags=re.IGNORECASE)
+    ref_text = re.sub(r'^II\s+', '2 ', ref_text, flags=re.IGNORECASE)
+    ref_text = re.sub(r'^III\s+', '3 ', ref_text, flags=re.IGNORECASE)
+    
     # 1) Extrait et retire le(s) code(s) F/Q en fin de ligne (optionnel)
     codes = []
     cm = CODE_RE.search(ref_text)
@@ -195,7 +218,8 @@ def parse_language_file(md_path, books_index, month_aliases):
 
     header_idx = []
     for i, l in enumerate(lines):
-        m = DAY_RE.match(l.strip())
+        # m = DAY_RE.match(l.strip())
+        m = DAY_RE.match(clean_line(l))
         if m and norm(m.group(2)) in {norm(k) for k in month_aliases}:
             header_idx.append(i)
     header_idx.append(len(lines))
@@ -206,7 +230,8 @@ def parse_language_file(md_path, books_index, month_aliases):
     for bi in range(len(header_idx) - 1):
         start, end = header_idx[bi], header_idx[bi + 1]
         block = lines[start:end]
-        m = DAY_RE.match(block[0].strip())
+        # m = DAY_RE.match(block[0].strip())
+        m = DAY_RE.match(clean_line(block[0]))
         day_num = int(m.group(1))
         month_key = m.group(2).upper().rstrip('.')
         month_num = month_aliases.get(month_key) or month_aliases.get(norm(month_key))
@@ -222,7 +247,8 @@ def parse_language_file(md_path, books_index, month_aliases):
         idx = 1
         while idx < len(block) and block[idx].strip() == '':
             idx += 1
-        refline = block[idx].strip() if idx < len(block) else ''
+        # refline = block[idx].strip() 
+        refline = clean_line(block[idx]) if idx < len(block) else ''
         idx += 1
 
         ref_info = parse_reference(refline, books_index)
@@ -232,7 +258,8 @@ def parse_language_file(md_path, books_index, month_aliases):
 
         while idx < len(block) and block[idx].strip() == '':
             idx += 1
-        title = block[idx].strip() if idx < len(block) else ''
+        # title = block[idx].strip() 
+        title = clean_line(block[idx]) if idx < len(block) else ''
         idx += 1
 
         rest_paragraphs = paragraphs_from(block[idx:])
