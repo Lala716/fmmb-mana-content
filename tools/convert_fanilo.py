@@ -66,6 +66,9 @@ DAY_RE = re.compile(
     re.IGNORECASE
 )
 BLOCK_RE = re.compile(r"^\\?\*?\s*\*{1,3}\s*([A-Za-zÀ-ÿ' \-]{2,40}?)\s*\*{1,3}\s*:\s*(.*)$")
+# Blocs "jeu" (mots croisés, grilles à remplir, consignes de jeu...) —
+# non exploitables en simple texte, exclus dès la génération.
+GAME_LABEL_RE = re.compile(r'lalao|hilalao|jeu|jouons|alamino.*soraty|veuillez.*crire', re.IGNORECASE)
 
 def clean_line(line):
     line = line.strip()
@@ -101,6 +104,9 @@ def _norm_key(s: str) -> str:
 def md_inline_to_html(text: str) -> str:
     text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     text = text.replace('\\*', '*').replace("\\'", "'")
+    # Retire les images résiduelles du Word converti (syntaxe markdown,
+    # avec ou sans attributs {width=...}) — non exploitables en HTML simple.
+    text = re.sub(r'!\[[^\]]*\]\([^)]*\)(\{[^}]*\})?', '', text)
     text = re.sub(r'\*\*\*(.+?)\*\*\*', r'<strong><em>\1</em></strong>', text)
     text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
     text = re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)
@@ -166,7 +172,7 @@ def parse_reference(ref_text, books_index):
     ref_text = re.sub(r'^I\s+', '1 ', ref_text, flags=re.IGNORECASE)
     ref_text = re.sub(r'^II\s+', '2 ', ref_text, flags=re.IGNORECASE)
     ref_text = re.sub(r'^III\s+', '3 ', ref_text, flags=re.IGNORECASE)
-    
+
     # 1) Extrait et retire le(s) code(s) F/Q en fin de ligne (optionnel)
     codes = []
     cm = CODE_RE.search(ref_text)
@@ -230,7 +236,7 @@ def parse_language_file(md_path, books_index, month_aliases):
     for bi in range(len(header_idx) - 1):
         start, end = header_idx[bi], header_idx[bi + 1]
         block = lines[start:end]
-        # m = DAY_RE.match(block[0].strip())
+         # m = DAY_RE.match(block[0].strip())
         m = DAY_RE.match(clean_line(block[0]))
         day_num = int(m.group(1))
         month_key = m.group(2).upper().rstrip('.')
@@ -247,8 +253,7 @@ def parse_language_file(md_path, books_index, month_aliases):
         idx = 1
         while idx < len(block) and block[idx].strip() == '':
             idx += 1
-        # refline = block[idx].strip() 
-        refline = clean_line(block[idx]) if idx < len(block) else ''
+        refline = block[idx].strip() if idx < len(block) else ''
         idx += 1
 
         ref_info = parse_reference(refline, books_index)
@@ -258,8 +263,7 @@ def parse_language_file(md_path, books_index, month_aliases):
 
         while idx < len(block) and block[idx].strip() == '':
             idx += 1
-        # title = block[idx].strip() 
-        title = clean_line(block[idx]) if idx < len(block) else ''
+        title = block[idx].strip() if idx < len(block) else ''
         idx += 1
 
         rest_paragraphs = paragraphs_from(block[idx:])
@@ -267,13 +271,22 @@ def parse_language_file(md_path, books_index, month_aliases):
         mode = 'body'
         body_paras = []
         blocs = []
+        skip_current_bloc = False
         for para in rest_paragraphs:
             bm = BLOCK_RE.match(para)
             if bm:
                 mode = 'blocs'
-                blocs.append({'label': bm.group(1).strip(), 'text': md_inline_to_html(bm.group(2).strip())})
-            elif mode == 'blocs' and blocs:
-                blocs[-1]['text'] += ' ' + md_inline_to_html(para)
+                label = bm.group(1).strip()
+                if GAME_LABEL_RE.search(label):
+                    skip_current_bloc = True
+                else:
+                    skip_current_bloc = False
+                    blocs.append({'label': label, 'text': md_inline_to_html(bm.group(2).strip())})
+            elif mode == 'blocs':
+                if skip_current_bloc:
+                    pass  # suite d'un bloc jeu exclu -> ignorée
+                elif blocs:
+                    blocs[-1]['text'] += ' ' + md_inline_to_html(para)
             else:
                 body_paras.append(para)
 
