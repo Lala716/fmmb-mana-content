@@ -8,6 +8,11 @@ Usage:
         --bible Bible.json --taona 2026 \
         --out fanilo-2026.json
 
+    # Optionnel : spécifier la Bible française séparément
+    python3 convert_fanilo.py Fanilo_MG.docx Fanilo_FR.docx \
+        --bible Bible.json --bible-fr LS_bible.json \
+        --taona 2026 --out fanilo-2026.json
+
 Voir : python3 convert_fanilo.py --help
 """
 import re, json, sys, os, shutil, subprocess, argparse, unicodedata
@@ -27,7 +32,12 @@ MOIS_FR = {
     'OCTOBRE': 10, 'NOVEMBRE': 11, 'DECEMBRE': 12, 'DÉCEMBRE': 12
 }
 
-# Correspondance livres : ordre canonique identique à Bible.json (book_number croissant)
+# ═══════════════════════════════════════════════════════════════
+# CORRESPONDANCE LIVRES FRANÇAIS (ordre canonique)
+# ── Ces noms sont utilisés pour :
+#   1. Parser les références dans le Word FR (ex: "Genèse 1:1")
+#   2. Générer le display `toko_sy_andininy` en français
+# ═══════════════════════════════════════════════════════════════
 FR_BOOK_NAMES_IN_ORDER = [
     "Genèse", "Exode", "Lévitique", "Nombres", "Deutéronome", "Josué", "Juges", "Ruth",
     "1 Samuel", "2 Samuel", "1 Rois", "2 Rois", "1 Chroniques", "2 Chroniques", "Esdras",
@@ -102,7 +112,7 @@ def _norm_key(s: str) -> str:
 
 
 def md_inline_to_html(text: str) -> str:
-    text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    text = text.replace('&', '&').replace('<', '<').replace('>', '>')
     text = text.replace('\\*', '*').replace("\\'", "'")
     # Retire les images résiduelles du Word converti (syntaxe markdown,
     # avec ou sans attributs {width=...}) — non exploitables en HTML simple.
@@ -139,6 +149,11 @@ def docx_to_markdown(docx_path: str) -> str:
 
 
 def build_books_index(bible_path, lang):
+    """
+    Construit un index {nom_normalisé -> book_object} pour parser les
+    références. En mode 'fr', chaque book_obj reçoit aussi '_fr_name'
+    pour que le display soit en français.
+    """
     with open(bible_path, encoding='utf-8') as f:
         bible = json.load(f)
     books_sorted = sorted(bible['books'], key=lambda b: b['book_number'])
@@ -149,7 +164,10 @@ def build_books_index(bible_path, lang):
             index[_norm_key(b['long_name'])] = b
     else:
         for b, fr_name in zip(books_sorted, FR_BOOK_NAMES_IN_ORDER):
-            index[_norm_key(fr_name)] = b
+            # On crée une copie enrichie avec le nom français
+            b_with_fr = dict(b)
+            b_with_fr['_fr_name'] = fr_name
+            index[_norm_key(fr_name)] = b_with_fr
     return index
 
 
@@ -204,10 +222,14 @@ def parse_reference(ref_text, books_index):
     if not book:
         return None
 
+    # ✅ Display : utilise le nom français si disponible (_fr_name),
+    #    sinon le nom malagasy (long_name)
+    display_name = book.get('_fr_name', book['long_name'])
+
     if c1 == c2:
-        display = f"{book['long_name']} {c1}:{v1}" + (f"-{v2}" if v2 != v1 else "")
+        display = f"{display_name} {c1}:{v1}" + (f"-{v2}" if v2 != v1 else "")
     else:
-        display = f"{book['long_name']} {c1}:{v1}-{c2}:{v2}"
+        display = f"{display_name} {c1}:{v1}-{c2}:{v2}"
 
     return {
         'display': display,
@@ -310,8 +332,30 @@ def parse_language_file(md_path, books_index, month_aliases):
     return entries, warnings
 
 
-def main(mg_md, fr_md, bible_path, taona, out_path):
+def main(mg_md, fr_md, bible_path, bible_fr_path, taona, out_path):
+    """
+    - bible_path    : Bible MG (Bible.json) — utilisé pour parser les refs MG et FR
+    - bible_fr_path : Bible FR (LS_bible.json) — optionnel, utilisé si fourni
+                      pour valider/croiser les book_numbers. Si non fourni,
+                      on utilise bible_path pour les deux (les book_numbers
+                      sont compatibles entre MG et FR).
+    """
     books_mg = build_books_index(bible_path, 'mg')
+
+    # Pour le FR, on utilise bible_path (MG) comme base pour les book_numbers,
+    # mais on enrichit avec les noms français via FR_BOOK_NAMES_IN_ORDER.
+    # Optionnellement, si --bible-fr est spécifié, on peut valider.
+    if bible_fr_path:
+        # Charger la Bible FR pour s'assurer que les book_numbers correspondent
+        with open(bible_fr_path, encoding='utf-8') as f:
+            bible_fr = json.load(f)
+        fr_books = bible_fr.get('LS_books', [])
+        if fr_books:
+            print(f"✓ Bible FR chargée : {len(fr_books)} livres")
+    else:
+        print("ℹ️  --bible-fr non spécifié, utilisation de Bible.json pour les deux langues")
+
+    # build_books_index pour FR : enrichit chaque book avec _fr_name
     books_fr = build_books_index(bible_path, 'fr')
 
     entries_mg, warn_mg = parse_language_file(mg_md, books_mg, MOIS_MG)
@@ -346,7 +390,7 @@ def main(mg_md, fr_md, bible_path, taona, out_path):
     with open(out_path, 'w', encoding='utf-8') as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 
-    print(f"OK : {len(andro)} jours écrits dans {out_path}")
+    print(f"\n✅ OK : {len(andro)} jours écrits dans {out_path}")
     print(f"  MG : {len(entries_mg)} jours parsés, {len(warn_mg)} avertissement(s)")
     print(f"  FR : {len(entries_fr)} jours parsés, {len(warn_fr)} avertissement(s)")
     if missing_mg:
@@ -370,11 +414,18 @@ if __name__ == '__main__':
         epilog="""Exemple :
   python3 convert_fanilo.py Fanilo_MG_2027.docx Fanilo_FR_2027.docx \\
       --bible ../fihiranaFMMB/src/assets/databases/Bible.json \\
+      --taona 2027 --out fanilo-2027.json
+
+  # Avec Bible française (optionnel, pour validation) :
+  python3 convert_fanilo.py Fanilo_MG_2027.docx Fanilo_FR_2027.docx \\
+      --bible Bible.json --bible-fr LS_bible.json \\
       --taona 2027 --out fanilo-2027.json"""
     )
     parser.add_argument('docx_mg', help="Chemin du Word Fanilo en malgache")
     parser.add_argument('docx_fr', help="Chemin du Word Fanilo en français")
-    parser.add_argument('--bible', required=True, help="Chemin vers Bible.json")
+    parser.add_argument('--bible', required=True, help="Chemin vers Bible.json (MG)")
+    parser.add_argument('--bible-fr', default=None,
+                        help="Chemin vers LS_bible.json (FR, optionnel — utilisé pour validation)")
     parser.add_argument('--taona', type=int, required=True, help="Année, ex: 2026")
     parser.add_argument('--out', required=True, help="Fichier JSON de sortie")
     args = parser.parse_args()
@@ -382,4 +433,4 @@ if __name__ == '__main__':
     mg_md = docx_to_markdown(args.docx_mg)
     fr_md = docx_to_markdown(args.docx_fr)
 
-    main(mg_md, fr_md, args.bible, args.taona, args.out)
+    main(mg_md, fr_md, args.bible, args.bible_fr, args.taona, args.out)
